@@ -38,8 +38,8 @@ jobs:
           from pathlib import Path
           evidence = Path("reports/verified_benchmark_results.json")
           if not evidence.is_file():
-              print("::notice::No verified benchmark results yet; benchmark gate deferred until evidence is generated.")
-              sys.exit(0)
+              print("::error::Required verified benchmark evidence is missing.")
+              sys.exit(1)
           with evidence.open(encoding="utf-8") as f:
               data = json.load(f)
 
