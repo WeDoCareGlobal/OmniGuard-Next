@@ -156,6 +156,12 @@ jobs:
           print(f"All third-party imports are declared ({sorted(req)})")
           PY
 
+      - name: Build dashboard
+        run: |
+          cd omniguard-dashboard
+          npm ci
+          npm run build
+
       - name: Verify Docker Compose Build & Runtime
         run: |
           # The Docker daemon is preinstalled on GitHub-hosted ubuntu runners.
