@@ -1,0 +1,32 @@
+services:
+  gateway:
+    build: ./omniguard-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - GOPHER_BACKEND_URL=https://integrate.api.nvidia.com/v1
+    volumes:
+      - ./omniguard-gateway:/app
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  # Optional Redis backend for distributed rate limiting and caching.
+  # The gateway runs without it; remove this service and the REDIS_*
+  # environment variables above if you want a single-container deployment.
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+volumes:
+  redis_data:
