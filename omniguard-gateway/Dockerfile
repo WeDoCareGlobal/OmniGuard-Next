@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir --break-system-packages -r requirements.txt     &
 
 # Copy application code
 COPY main.py .
-COPY test_gateway.py .
+COPY security/ ./security/
 
 # Change ownership to non-root user
 RUN chown -R omniguard:omniguard /app
