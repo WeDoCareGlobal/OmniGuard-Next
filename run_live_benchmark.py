@@ -7,7 +7,7 @@ import urllib.error
 from statistics import mean
 
 # Paths
-GATEWAY_MAIN_PATH = r"C:\Users\DT User\AppData\Local\hermes\profiles\analyst\cache\scratch\scan\mirrors\omniguard-gateway\main.py"
+GATEWAY_MAIN_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "omniguard-gateway", "main.py")
 HEALTH_URL = "http://localhost:8000/healthz"
 CHAT_URL = "http://localhost:8000/v1/chat/completions"
 API_KEY = os.environ.get("OMNIGUARD_BENCH_API_KEY", "sk-admin-123")
@@ -236,7 +236,7 @@ print(f"Exact P99 Latency Overhead: {p99:.2f} ms")
 print(f"Mean Latency: {mean_lat:.2f} ms")
 
 # Save raw results to JSON
-output_dir = r"C:\OmniGuard_Production\reports"
+output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports")
 os.makedirs(output_dir, exist_ok=True)
 output_file = os.path.join(output_dir, "verified_benchmark_results.json")
 with open(output_file, 'w') as f:
