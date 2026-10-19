@@ -30,54 +30,6 @@ jobs:
           python -m py_compile run_live_benchmark.py client_sdk.py
           echo "Syntax validation passed for harness and SDK."
 
-      - name: Verify benchmark results are present and pass targets
-        run: |
-          python - <<'PY'
-          import json, sys
-
-          from pathlib import Path
-          evidence = Path("reports/verified_benchmark_results.json")
-          if not evidence.is_file():
-              print("::error::Required verified benchmark evidence is missing.")
-              sys.exit(1)
-          with evidence.open(encoding="utf-8") as f:
-              data = json.load(f)
-
-          if isinstance(data, dict) and "results" in data:
-              data = data["results"]
-
-          adv = [r for r in data if r.get("type") == "adversarial"]
-          ben = [r for r in data if r.get("type") == "benign"]
-
-          if not adv or not ben:
-              print("::error::benchmark results missing adversarial or benign vectors")
-              sys.exit(1)
-
-          detection = sum(1 for r in adv if r["status"] == 403) / len(adv)
-          fpr = sum(1 for r in ben if r["status"] == 403) / len(ben)
-          lat = sorted(r["latency_ms"] for r in data)
-          p95 = lat[int(len(lat) * 0.95) - 1] if len(lat) >= 20 else lat[-1]
-
-          print(f"Detection: {detection*100:.2f}% ({sum(1 for r in adv if r['status']==403)}/{len(adv)})")
-          print(f"FPR:       {fpr*100:.2f}% ({sum(1 for r in ben if r['status']==403)}/{len(ben)})")
-          print(f"P95:       {p95:.2f} ms")
-
-          failures = []
-          if detection < 0.96:
-              failures.append(f"detection {detection*100:.2f}% below 96% gate")
-          if fpr > 0.0:
-              failures.append(f"false positive rate {fpr*100:.2f}% above 0% gate")
-          if p95 > 25.0:
-              failures.append(f"P95 {p95:.2f}ms above 25ms gate")
-
-          if failures:
-              for msg in failures:
-                  print(f"::error::{msg}")
-              sys.exit(1)
-
-          print("All benchmark gates passed.")
-          PY
-
       - name: Verify gateway source imports cleanly
         run: |
           # The gateway source lives in omniguard-gateway/ in this repository.
@@ -191,6 +143,9 @@ jobs:
             sleep 2
           done
 
+          echo "Running live benchmark against the container..."
+          python run_live_benchmark.py
+
           echo "Docker container built and verified live in Linux runner!"
 
           echo "::group::Container logs"
@@ -198,6 +153,62 @@ jobs:
           echo "::endgroup::"
 
           docker compose down
+
+      - name: Upload live benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: omniguard-live-benchmark
+          path: reports/verified_benchmark_results.json
+          if-no-files-found: warn
+
+      - name: Verify benchmark results are present and pass targets
+        run: |
+          python - <<'PY'
+          import json, sys
+
+          from pathlib import Path
+          evidence = Path("reports/verified_benchmark_results.json")
+          if not evidence.is_file():
+              print("::error::Required verified benchmark evidence is missing.")
+              sys.exit(1)
+          with evidence.open(encoding="utf-8") as f:
+              data = json.load(f)
+
+          if isinstance(data, dict) and "results" in data:
+              data = data["results"]
+
+          adv = [r for r in data if r.get("type") == "adversarial"]
+          ben = [r for r in data if r.get("type") == "benign"]
+
+          if not adv or not ben:
+              print("::error::benchmark results missing adversarial or benign vectors")
+              sys.exit(1)
+
+          detection = sum(1 for r in adv if r["status"] == 403) / len(adv)
+          fpr = sum(1 for r in ben if r["status"] == 403) / len(ben)
+          lat = sorted(r["latency_ms"] for r in data)
+          p95 = lat[int(len(lat) * 0.95) - 1] if len(lat) >= 20 else lat[-1]
+
+          print(f"Detection: {detection*100:.2f}% ({sum(1 for r in adv if r['status']==403)}/{len(adv)})")
+          print(f"FPR:       {fpr*100:.2f}% ({sum(1 for r in ben if r['status']==403)}/{len(ben)})")
+          print(f"P95:       {p95:.2f} ms")
+
+          failures = []
+          if detection < 0.96:
+              failures.append(f"detection {detection*100:.2f}% below 96% gate")
+          if fpr > 0.0:
+              failures.append(f"false positive rate {fpr*100:.2f}% above 0% gate")
+          if p95 > 25.0:
+              failures.append(f"P95 {p95:.2f}ms above 25ms gate")
+
+          if failures:
+              for msg in failures:
+                  print(f"::error::{msg}")
+              sys.exit(1)
+
+          print("All benchmark gates passed.")
+          PY
 
       - name: Run unit tests if a test suite is present
         run: |
