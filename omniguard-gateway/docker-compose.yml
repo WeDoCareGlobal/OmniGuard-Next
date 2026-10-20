@@ -1,0 +1,34 @@
+# OmniGuard Gateway docker-compose.yml
+# Connects OmniGuard Gateway with a lightweight Redis instance for rate limiting and cache.
+version: "3.8"
+
+services:
+  omniguard-gateway:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - GOPHER_BACKEND_URL=https://integrate.api.nvidia.com/v1
+    depends_on:
+      - redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+volumes:
+  redis_data:

@@ -1,0 +1,22 @@
+/*
+  OmniGuard Dashboard Global Styles
+  Built with TailwindCSS v3.4+
+*/
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom variables */
+:root {
+  --wdcg-navy: #0a0e21;
+  --wdcg-cyan: #08ffd4;
+  --wdcg-emerald: #00e676;
+  --wdcg-slate: #f1f5f9;
+}
+
+/* Ensure html/body fill for min-h-screen */
+html, body #__next {
+  height: 100%;
+  width: 100%;
+}

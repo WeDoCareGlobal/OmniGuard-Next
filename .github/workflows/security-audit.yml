@@ -1,0 +1,31 @@
+name: Dependency security audit
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Audit dashboard dependencies
+        working-directory: omniguard-dashboard
+        run: |
+          npm ci --ignore-scripts
+          npm audit --json > ../reports/npm-audit.json || audit_status=$?
+          test "${audit_status:-0}" -le 1
+          npm audit --omit=dev --audit-level=high
+      - name: Audit gateway dependencies
+        run: |
+          python -m pip install pip-audit
+          pip-audit -r omniguard-gateway/requirements.txt --format json --output reports/pip-audit.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-audit
+          path: reports/*audit.json
