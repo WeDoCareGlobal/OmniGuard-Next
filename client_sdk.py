@@ -1,75 +1,61 @@
-"""
-OmniGuard Client SDK
-Zero-dependency Python client for integrating with OmniGuard gateway.
-Usage:
-    from omnisdk import OmniGuardClient
-    client = OmniGuardClient(base_url="http://localhost:8000/v1")
-    response = client.chat_completion(messages=[{"role": "user", "content": "Hello"}])
-"""
-
+"""Synchronous client for the OmniGuard inspection gateway (not an LLM provider)."""
 import json
+import urllib.error
 import urllib.request
-from typing import List, Dict, Any, Optional
+
+
+class OmniGuardError(RuntimeError):
+    """A rejected, unavailable or malformed gateway response."""
 
 
 class OmniGuardClient:
-    def __init__(self, base_url: str, api_key: Optional[str] = None):
-        """
-        Initialize the OmniGuard client.
-        :param base_url: Base URL of the OmniGuard gateway (e.g., "http://localhost:8000/v1")
-        :param api_key: Optional API key for authentication
-        """
-        self.base_url = base_url.rstrip('/')
+    def __init__(self, base_url, api_key=None, timeout=30):
+        self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+        self.timeout = timeout
 
-    def _request(self, endpoint: str, data: dict) -> dict:
-        url = f"{self.base_url}/{endpoint.lstrip('/')}"
-        headers = {"Content-Type": "application/json"}
+    def _request(self, endpoint, data=None, root=False):
+        base = self.base_url.removesuffix("/v1") if root else self.base_url
+        headers = {"Accept": "application/json"}
         if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers=headers, method='POST')
+            headers["X-API-Key"] = self.api_key
+        payload = None
+        if data is not None:
+            headers["Content-Type"] = "application/json"
+            payload = json.dumps(data).encode("utf-8")
+        request = urllib.request.Request(
+            f"{base}/{endpoint.lstrip('/')}", data=payload, headers=headers,
+            method="POST" if data is not None else "GET",
+        )
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                return json.loads(resp.read().decode('utf-8'))
-        except urllib.request.HTTPError as e:
-            error_body = e.read().decode('utf-8') if e.read() else ''
-            raise Exception(f"HTTP {e.code}: {error_body}")
-        except Exception as e:
-            raise Exception(f"Request failed: {e}")
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                result = json.loads(response.read().decode("utf-8"))
+                if not isinstance(result, dict):
+                    raise OmniGuardError("Malformed gateway response")
+                if data is not None and (
+                    response.status != 200
+                    or response.headers.get("X-Governance-Decision") != "ALLOW"
+                ):
+                    raise OmniGuardError("Gateway did not explicitly allow this request")
+                return result
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            try:
+                error = json.loads(body)
+                reason = error.get("block_reason") or error.get("error") or error.get("detail")
+            except (ValueError, AttributeError):
+                reason = "Gateway rejected request"
+            raise OmniGuardError(f"HTTP {exc.code}: {reason}") from exc
+        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+            raise OmniGuardError("Gateway unavailable or response invalid") from exc
 
-    def chat_completion(self, messages: List[Dict[str, str]], model: str = "omniguard-0.1", temperature: float = 0.7) -> dict:
-        """
-        Send a chat completion request through the OmniGuard gateway.
-        :param messages: List of message dicts with 'role' and 'content'
-        :param model: Model name (default: omniguard-0.1)
-        :param temperature: Sampling temperature (default: 0.7)
-        :return: Response dict from the gateway
-        """
-        data = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature
-        }
-        return self._request("chat/completions", data)
+    def chat_completion(self, messages, model="omniguard-2.0", temperature=0.7):
+        return self._request("chat/completions", {
+            "model": model, "messages": messages, "temperature": temperature,
+        })
 
-    def health_check(self) -> dict:
-        """
-        Check the health of the OmniGuard gateway.
-        :return: Health check response
-        """
-        return self._request("healthz", {})
+    def health_check(self):
+        return self._request("healthz", root=True)
 
-    def get_metrics(self) -> str:
-        """
-        Get Prometheus metrics from the gateway.
-        :return: Metrics as plain text
-        """
-        url = f"{self.base_url}/metrics"
-        req = urllib.request.Request(url, headers={"Accept": "text/plain"})
-        if self.api_key:
-            req.add_header("Authorization", f"Bearer {self.api_key}")
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return resp.read().decode('utf-8')
-        except Exception as e:
-            raise Exception(f"Failed to fetch metrics: {e}")
+    def get_metrics(self):
+        return self._request("metrics", root=True)
