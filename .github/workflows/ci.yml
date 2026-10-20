@@ -109,6 +109,10 @@ jobs:
           print(f"All third-party imports are declared ({sorted(req)})")
           PY
 
+      - name: Verify fail-closed execution adapter
+        run: |
+          python -m unittest discover -s tests -p "test_execution_guard.py" -v
+
       - name: Build dashboard
         run: |
           cd omniguard-dashboard
