@@ -2,9 +2,9 @@ name: OmniGuard Gateway CI
 
 on:
   push:
-    branches: [main, feat/consolidate-omniguard-versions]
+    branches: [main, feat/consolidate-omniguard-versions, 'fix/**']
   pull_request:
-    branches: [main]
+    branches: [main, feat/consolidate-omniguard-versions, 'fix/**']
 
 jobs:
   test:
@@ -24,6 +24,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r omniguard-gateway/requirements.txt
           pip install slowapi requests
+
+      - name: Run gateway security regression suite
+        run: |
+          cd omniguard-gateway
+          python -m pip install pytest httpx
+          python -m pytest tests/ -v
+
+      - name: Verify production fails closed without secrets
+        run: |
+          cd omniguard-gateway
+          if env -u OMNIGUARD_API_KEYS_JSON -u OMNIGUARD_HMAC_KEY -u ODYSSEUS_INTERNAL_TOKEN OMNIGUARD_ENV=production OMNIGUARD_RATE_LIMIT_STORAGE_URI=redis://localhost:6379/0 python -c 'import main'; then
+            echo "::error::Gateway booted without production credentials"
+            exit 1
+          fi
 
       - name: Verify benchmark harness integrity
         run: |
