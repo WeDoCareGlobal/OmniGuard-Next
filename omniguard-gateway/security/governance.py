@@ -20,7 +20,17 @@ INTERNAL_TOOL_HEADER = "X-Odysseus-Internal-Token"
 INTERNAL_TOOL_USER = "internal-tool"
 
 # OmniGuard governance signature configuration
-OMNIGUARD_HMAC_KEY = os.environ.get("OMNIGUARD_HMAC_KEY") or "omniguard-enterprise-hmac-key-2024"
+def _load_hmac_key() -> str:
+    key = os.environ.get("OMNIGUARD_HMAC_KEY", "")
+    if os.environ.get("OMNIGUARD_ENV", "development").lower() == "production":
+        if len(key.encode()) < 32:
+            raise RuntimeError("Production requires OMNIGUARD_HMAC_KEY of at least 32 bytes")
+        if not os.environ.get("ODYSSEUS_INTERNAL_TOKEN"):
+            raise RuntimeError("Production requires ODYSSEUS_INTERNAL_TOKEN")
+    return key or "omniguard-development-only-signing-key"
+
+
+OMNIGUARD_HMAC_KEY = _load_hmac_key()
 OMNIGUARD_HMAC_KEY_BYTES = OMNIGUARD_HMAC_KEY.encode()
 
 
@@ -42,7 +52,9 @@ class GovernanceSigner:
     """
     
     def __init__(self, hmac_key: Optional[bytes] = None):
-        self.hmac_key = hmac_key or OMNIGUARD_HMAC_KEY_BYTES
+        self.hmac_key = hmac_key if hmac_key is not None else OMNIGUARD_HMAC_KEY_BYTES
+        previous = os.environ.get("OMNIGUARD_HMAC_PREVIOUS_KEYS", "")
+        self.previous_keys = [key.encode() for key in previous.split(",") if key] if hmac_key is None else []
     
     def sign(self, payload: str, timestamp: Optional[str] = None) -> GovernanceSignature:
         """Generate a governance signature for payload."""
@@ -92,8 +104,14 @@ class GovernanceSigner:
     
     def verify(self, payload: str, signature: GovernanceSignature) -> bool:
         """Verify a governance signature."""
-        expected = self.sign(payload, signature.timestamp)
-        return secrets.compare_digest(expected.signature, signature.signature)
+        if signature.algorithm != "hmac-sha256" or not signature.timestamp:
+            return False
+        message = f"{payload}|{signature.timestamp}".encode()
+        for key in [self.hmac_key, *self.previous_keys]:
+            expected = hmac.new(key, message, hashlib.sha256).hexdigest()
+            if secrets.compare_digest(expected, signature.signature):
+                return True
+        return False
     
     def to_header(self, sig: GovernanceSignature) -> str:
         """Format signature for HTTP header."""

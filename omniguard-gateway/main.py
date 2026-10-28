@@ -329,19 +329,42 @@ def _rate_limit_key(request: Request) -> str:
     """
     api_key = request.headers.get("X-API-Key")
     if api_key:
-        return f"key:{api_key}"
+        return f"key:{hashlib.sha256(api_key.encode()).hexdigest()}"
     return f"ip:{get_remote_address(request)}"
 
 
-limiter = Limiter(key_func=_rate_limit_key)
+limiter = Limiter(key_func=_rate_limit_key, storage_uri=os.getenv("OMNIGUARD_RATE_LIMIT_STORAGE_URI", "memory://"))
 
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-VALID_API_KEYS = {
-    "sk-admin-123": {"id": "admin", "scopes": ["*"], "type": "admin"},
-    "sk-agent-1": {"id": "agent-1", "scopes": ["chat", "read"], "type": "agent"},
-    "sk-service-1": {"id": "service-1", "scopes": ["chat", "write"], "type": "service"},
-}
+def _load_api_keys():
+    """Load credentials from configuration; never enable demo keys in production."""
+    production = os.getenv("OMNIGUARD_ENV", "development").lower() == "production"
+    raw = os.getenv("OMNIGUARD_API_KEYS_JSON")
+    if raw:
+        configured = json.loads(raw)
+        if not isinstance(configured, dict) or not configured:
+            raise RuntimeError("OMNIGUARD_API_KEYS_JSON must be a nonempty object")
+        for key, principal in configured.items():
+            if not isinstance(key, str) or len(key) < 24 or not isinstance(principal, dict):
+                raise RuntimeError("Invalid API key configuration")
+            if not principal.get("id") or not isinstance(principal.get("scopes"), list):
+                raise RuntimeError("Each API key needs an id and scopes list")
+        return configured
+    if production:
+        raise RuntimeError("Production requires OMNIGUARD_API_KEYS_JSON")
+    # Legacy demo credentials remain available only in development.
+    return {
+        "sk-admin-123": {"id": "admin", "scopes": ["*"], "type": "admin"},
+        "sk-agent-1": {"id": "agent-1", "scopes": ["chat", "read"], "type": "agent"},
+        "sk-service-1": {"id": "service-1", "scopes": ["chat", "write"], "type": "service"},
+    }
+
+
+if os.getenv("OMNIGUARD_ENV", "development").lower() == "production" and not os.getenv("OMNIGUARD_RATE_LIMIT_STORAGE_URI", "").startswith(("redis://", "rediss://")):
+    raise RuntimeError("Production requires shared Redis rate-limit storage")
+
+VALID_API_KEYS = _load_api_keys()
 
 async def get_api_key(api_key: str = Depends(API_KEY_HEADER)):
     if not api_key:
