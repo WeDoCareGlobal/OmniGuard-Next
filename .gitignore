@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+*.log
+.next/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Test artifacts
+pytest_cache/
+.coverage
+htmlcov/
+audit.sqlite
+
+# OS
+.DS_Store
+Thumbs.db

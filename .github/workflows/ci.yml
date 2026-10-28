@@ -1,0 +1,231 @@
+name: OmniGuard Gateway CI
+
+on:
+  push:
+    branches: [main, feat/consolidate-omniguard-versions]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r omniguard-gateway/requirements.txt
+          pip install slowapi requests
+
+      - name: Verify benchmark harness integrity
+        run: |
+          python -m py_compile run_live_benchmark.py client_sdk.py
+          echo "Syntax validation passed for harness and SDK."
+
+      - name: Verify gateway source imports cleanly
+        run: |
+          # The gateway source lives in omniguard-gateway/ in this repository.
+          if [ -f omniguard-gateway/main.py ]; then
+            echo "Gateway source detected at omniguard-gateway/main.py"
+            cd omniguard-gateway
+            python -m py_compile main.py
+            echo "main.py compiles."
+            python -c "import security; print('security package imports OK, version:', security.__version__)"
+            python -c "import main; print('Gateway imports successfully')"
+          elif [ -f main.py ]; then
+            echo "Gateway source detected at repository root"
+            python -m py_compile main.py
+            python -c "import main; print('Gateway imports successfully')"
+          else
+            echo "::notice::Gateway source (main.py) not present in this repository."
+            echo "::notice::Skipping gateway import check — benchmark and syntax gates above still apply."
+          fi
+
+      - name: Verify every import is declared in requirements.txt
+        run: |
+          # This gate exists because the container image installs only requirements.txt.
+          # A dependency installed on the runner but missing from requirements.txt passes
+          # every host-side import check and then crashes the container at boot.
+          cd omniguard-gateway
+
+          python - <<'PY'
+          import ast, os, sys
+
+          # Distribution name -> import name, for cases where they differ.
+          IMPORT_ALIASES = {"pyjwt": "jwt"}
+
+          req = set()
+          with open("requirements.txt", encoding="utf-8") as f:
+              for line in f:
+                  line = line.strip()
+                  if line and not line.startswith("#"):
+                      pkg = (line.split(">")[0].split("=")[0].split("<")[0]
+                                 .split("!")[0].split("~")[0].strip().lower())
+                      req.add(pkg)
+                      req.add(IMPORT_ALIASES.get(pkg, pkg))
+
+          stdlib = set(getattr(sys, "stdlib_module_names", ()))
+
+          missing, seen = set(), set()
+          for root, dirs, files in os.walk("."):
+              dirs[:] = [d for d in dirs if d not in {"__pycache__", ".git"}]
+              for fn in files:
+                  if not fn.endswith(".py"):
+                      continue
+                  path = os.path.join(root, fn)
+                  with open(path, encoding="utf-8") as f:
+                      tree = ast.parse(f.read(), filename=path)
+                  for node in ast.walk(tree):
+                      names = []
+                      if isinstance(node, ast.Import):
+                          names = [a.name for a in node.names]
+                      elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                          names = [node.module]
+                      for name in names:
+                          top = name.split(".")[0].lower()
+                          if top in stdlib or top in req:
+                              continue
+                          if top in {"security", "main"}:  # local modules
+                              continue
+                          missing.add(top)
+                          seen.add(f"{path}: {name}")
+
+          if missing:
+              print("::error::Modules imported but not declared in requirements.txt:")
+              for mod in sorted(missing):
+                  print(f"::error::  - {mod}")
+              for loc in sorted(seen):
+                  print(f"  {loc}")
+              sys.exit(1)
+
+          print(f"All third-party imports are declared ({sorted(req)})")
+          PY
+
+      - name: Verify fail-closed execution adapter
+        run: |
+          python -m unittest discover -s tests -p "test_execution_guard.py" -v
+
+      - name: Build dashboard
+        run: |
+          cd omniguard-dashboard
+          npm ci
+          npm run build
+
+      - name: Verify Docker Compose Build & Runtime
+        run: |
+          # The Docker daemon is preinstalled on GitHub-hosted ubuntu runners.
+          docker compose version
+          docker compose config -q && echo "docker-compose.yml is valid."
+
+          docker compose build
+          docker compose up -d
+
+          echo "Waiting for gateway health check..."
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/healthz > /tmp/healthz.json 2>/dev/null; then
+              echo "Health check passed on attempt $i."
+              cat /tmp/healthz.json
+              echo
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "::error::Gateway failed health check after 30 attempts."
+              echo "::group::Container logs"
+              docker compose logs
+              echo "::endgroup::"
+              docker compose down
+              exit 1
+            fi
+            sleep 2
+          done
+
+          echo "Running live benchmark against the container..."
+          python run_live_benchmark.py
+          python -m unittest discover -s tests -p "test_sdk_live.py" -v
+
+          echo "Docker container built and verified live in Linux runner!"
+
+          echo "::group::Container logs"
+          docker compose logs
+          echo "::endgroup::"
+
+          docker compose down
+
+      - name: Upload live benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: omniguard-live-benchmark
+          path: reports/verified_benchmark_results.json
+          if-no-files-found: warn
+
+      - name: Verify benchmark results are present and pass targets
+        run: |
+          python - <<'PY'
+          import json, sys
+
+          from pathlib import Path
+          evidence = Path("reports/verified_benchmark_results.json")
+          if not evidence.is_file():
+              print("::error::Required verified benchmark evidence is missing.")
+              sys.exit(1)
+          with evidence.open(encoding="utf-8") as f:
+              data = json.load(f)
+
+          if isinstance(data, dict) and "results" in data:
+              data = data["results"]
+
+          adv = [r for r in data if r.get("type") == "adversarial"]
+          ben = [r for r in data if r.get("type") == "benign"]
+
+          if not adv or not ben:
+              print("::error::benchmark results missing adversarial or benign vectors")
+              sys.exit(1)
+
+          detection = sum(1 for r in adv if r["status"] == 403) / len(adv)
+          fpr = sum(1 for r in ben if r["status"] == 403) / len(ben)
+          lat = sorted(r["latency_ms"] for r in data)
+          p95 = lat[int(len(lat) * 0.95) - 1] if len(lat) >= 20 else lat[-1]
+
+          print(f"Detection: {detection*100:.2f}% ({sum(1 for r in adv if r['status']==403)}/{len(adv)})")
+          print(f"FPR:       {fpr*100:.2f}% ({sum(1 for r in ben if r['status']==403)}/{len(ben)})")
+          print(f"P95:       {p95:.2f} ms")
+
+          failures = []
+          if detection < 0.96:
+              failures.append(f"detection {detection*100:.2f}% below 96% gate")
+          if fpr > 0.0:
+              failures.append(f"false positive rate {fpr*100:.2f}% above 0% gate")
+          if p95 > 25.0:
+              failures.append(f"P95 {p95:.2f}ms above 25ms gate")
+
+          if failures:
+              for msg in failures:
+                  print(f"::error::{msg}")
+              sys.exit(1)
+
+          print("All benchmark gates passed.")
+          PY
+
+      - name: Run unit tests if a test suite is present
+        run: |
+          if [ -d omniguard-gateway/tests ]; then
+            echo "Test suite detected at omniguard-gateway/tests/"
+            cd omniguard-gateway
+            python -m pytest tests/ -v
+          elif [ -d tests ]; then
+            echo "Test suite detected at tests/"
+            python -m pytest tests/ -v
+          else
+            echo "::notice::No tests/ directory present."
+            echo "::notice::Note: omniguard-gateway/test_gateway.py targets the v0.1.0 response"
+            echo "::notice::shape and is not wired into pytest; it is not executed by CI."
+          fi
