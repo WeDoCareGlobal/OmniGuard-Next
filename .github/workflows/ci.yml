@@ -107,7 +107,7 @@ jobs:
                           top = name.split(".")[0].lower()
                           if top in stdlib or top in req:
                               continue
-                          if top in {"security", "main"}:  # local modules
+                          if top in {"security", "main", "authorization"}:  # local modules
                               continue
                           missing.add(top)
                           seen.add(f"{path}: {name}")
