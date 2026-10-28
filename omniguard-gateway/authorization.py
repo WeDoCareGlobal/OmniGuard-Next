@@ -49,6 +49,7 @@ class ToolOperation:
     operation: str
     params: Dict[str, Any]
     required_scopes: Set[str]
+    tenant_id: Optional[str] = None
     risk_level: str = "medium"  # low, medium, high, critical
     requires_human_approval: bool = False
 
@@ -199,8 +200,7 @@ class DenyByDefaultPolicy(AuthorizationPolicy):
                 break
         
         # Check tenant isolation
-        if context.tool_operation and hasattr(context.tool_operation, 'tenant_id'):
-            if context.tool_operation.tenant_id != context.principal.tenant_id:
+        if not context.tool_operation.tenant_id or context.tool_operation.tenant_id != context.principal.tenant_id:
                 return AuthResult(
                     decision=AuthDecision.DENY,
                     principal_id=context.principal.id,
