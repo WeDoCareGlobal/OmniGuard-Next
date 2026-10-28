@@ -53,6 +53,8 @@ class GovernanceSigner:
     
     def __init__(self, hmac_key: Optional[bytes] = None):
         self.hmac_key = hmac_key if hmac_key is not None else OMNIGUARD_HMAC_KEY_BYTES
+        previous = os.environ.get("OMNIGUARD_HMAC_PREVIOUS_KEYS", "")
+        self.previous_keys = [key.encode() for key in previous.split(",") if key] if hmac_key is None else []
     
     def sign(self, payload: str, timestamp: Optional[str] = None) -> GovernanceSignature:
         """Generate a governance signature for payload."""
@@ -102,8 +104,14 @@ class GovernanceSigner:
     
     def verify(self, payload: str, signature: GovernanceSignature) -> bool:
         """Verify a governance signature."""
-        expected = self.sign(payload, signature.timestamp)
-        return secrets.compare_digest(expected.signature, signature.signature)
+        if signature.algorithm != "hmac-sha256" or not signature.timestamp:
+            return False
+        message = f"{payload}|{signature.timestamp}".encode()
+        for key in [self.hmac_key, *self.previous_keys]:
+            expected = hmac.new(key, message, hashlib.sha256).hexdigest()
+            if secrets.compare_digest(expected, signature.signature):
+                return True
+        return False
     
     def to_header(self, sig: GovernanceSignature) -> str:
         """Format signature for HTTP header."""
